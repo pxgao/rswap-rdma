@@ -1,0 +1,15 @@
+.log.o.cmd
+.rdma_library.o.cmd
+.rmem.o.cmd
+.rmem_rdma.ko.cmd
+.rmem_rdma.mod.o.cmd
+.rmem_rdma.o.cmd
+.tmp_versions/
+log.o
+modules.order
+rdma_library.o
+rmem.o
+rmem_rdma.ko
+rmem_rdma.mod.c
+rmem_rdma.mod.o
+rmem_rdma.o

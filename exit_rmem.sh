@@ -7,7 +7,6 @@ do
   done
 done
 
-umount /root/temp
 
 while [ -n "$(lsmod | grep rmem_rdma)" ]
 do
