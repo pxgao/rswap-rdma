@@ -122,13 +122,13 @@ int rdma_library_ready(void);
 int rdma_library_init(void);
 int rdma_library_exit(void);
 
-rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size);
+rdma_ctx_t rdma_init(int npages, char* ip_addr, int port);
 int rdma_exit(rdma_ctx_t);
 
 int rdma_op(rdma_ctx_t ctx, rdma_req_t req, int n_requests);
-void make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op, u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req);
-void simple_make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op, u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req);
-bool merge_wr(struct ib_send_wr* old_wr, struct ib_sge *old_sg, struct ib_send_wr* new_wr, struct ib_sge *new_sg);
+void make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* wr, struct ib_sge *sg, RDMA_OP op, u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req);
+void simple_make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* wr, struct ib_sge *sg, RDMA_OP op, u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req);
+bool merge_wr(struct ib_rdma_wr* old_wr, struct ib_sge *old_sg, struct ib_rdma_wr* new_wr, struct ib_sge *new_sg);
 void poll_cq(rdma_ctx_t ctx);
 #endif // _RDMA_LIB_H_
 

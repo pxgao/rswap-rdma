@@ -7,6 +7,7 @@
 #include <linux/smp.h>
 #include <linux/version.h>
 #include <linux/cpufreq.h>
+#include <linux/vmalloc.h>
 
 #define CHECK_MSG_RET(arg, msg, ret) {\
    if ((arg) == 0){\
@@ -26,7 +27,7 @@ extern int initd;
 
 
 static struct ib_device_singleton {
-    struct ib_device_attr mlnx_device_attr;
+    //struct ib_device_attr mlnx_device_attr;
     struct ib_client ibclient;
     bool ready_to_use;
     struct ib_device* dev;
@@ -204,7 +205,7 @@ static void add_device(struct ib_device* dev)
     }
 
     // get device attributes
-    ib_query_device(dev, &rdma_ib_device.mlnx_device_attr); 
+    //ib_query_device(dev, &rdma_ib_device.mlnx_device_attr); 
 
     // register handler
     INIT_IB_EVENT_HANDLER(&rdma_ib_device.ieh, dev, async_event_handler);
@@ -216,7 +217,7 @@ static void add_device(struct ib_device* dev)
     rdma_ib_device.ready_to_use = true;
 }
 
-static void remove_device(struct ib_device* dev)
+static void remove_device(struct ib_device* dev, void* client_data)
 {
     LOG_KERN(LOG_INFO, "remove_device");
 }
@@ -356,7 +357,8 @@ static int receive_data(rdma_ctx_t ctx, char* data, int size) {
     oldfs = get_fs();
     set_fs(KERNEL_DS);
 
-    retval = sock_recvmsg(ctx->sock, &msg, size, 0);
+    //retval = sock_recvmsg(ctx->sock, &msg, size, 0);
+    retval = sock_recvmsg(ctx->sock, &msg, size);
 
     set_fs(oldfs);
 
@@ -538,9 +540,12 @@ static int rdma_setup(rdma_ctx_t ctx)
     CHECK_MSG_RET(ctx->rdma_recv_buffer != 0, "Error kmalloc", -1);
 
     // create memory region
-    ctx->mr = ib_get_dma_mr(ctx->pd, IB_ACCESS_REMOTE_READ | 
-                                     IB_ACCESS_REMOTE_WRITE | 
-                                     IB_ACCESS_LOCAL_WRITE);
+    //ctx->mr = ib_get_dma_mr(ctx->pd, IB_ACCESS_REMOTE_READ | 
+    //                                 IB_ACCESS_REMOTE_WRITE | 
+    //                                 IB_ACCESS_LOCAL_WRITE);
+    ctx->mr = ctx->pd->device->get_dma_mr(ctx->pd, IB_ACCESS_REMOTE_READ |
+                                                   IB_ACCESS_REMOTE_WRITE |
+                                                   IB_ACCESS_LOCAL_WRITE); 
     CHECK_MSG_RET(ctx->mr != 0, "Error creating MR", -1);
 
     ctx->rkey = ctx->mr->rkey;
@@ -716,10 +721,11 @@ int rdma_exit(rdma_ctx_t ctx)
     return 0;
 }
 
-rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
+rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
 {
     int retval;
     rdma_ctx_t ctx;
+    struct ib_cq_init_attr cq_attr;
 
     LOG_KERN(LOG_INFO, "RDMA_INIT. ip_addr: %s port: %d npages: %d", ip_addr, port, npages);
     
@@ -734,14 +740,19 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
         LOG_KERN(LOG_INFO, "ERROR", 0);
     }
 
-    ctx->pd = ib_alloc_pd(rdma_ib_device.dev);
+    //using 0 as flag, need to check if that is correct
+    ctx->pd = ib_alloc_pd(rdma_ib_device.dev, 0);
     CHECK_MSG_RET(ctx->pd != 0, "Error creating pd", 0);
-   
+
+    memset(&cq_attr, 0, sizeof(cq_attr));
+    cq_attr.cqe = CQE_SIZE;   
     // Note that we set the CQ context to our ctx structure 
-    ctx->send_cq = ib_create_cq(rdma_ib_device.dev, 
-            comp_handler_send, cq_event_handler_send, ctx, CQE_SIZE, 0);
-    ctx->recv_cq = ib_create_cq(rdma_ib_device.dev, 
-            comp_handler_recv, cq_event_handler_recv, ctx, CQE_SIZE, 0);
+    ctx->send_cq = ib_create_cq(rdma_ib_device.dev, comp_handler_send, cq_event_handler_send, ctx, 
+    //                            CQE_SIZE, 0);
+                                  &cq_attr);
+    ctx->recv_cq = ib_create_cq(rdma_ib_device.dev, comp_handler_recv, cq_event_handler_recv, ctx, 
+    //                            CQE_SIZE, 0);
+                                  &cq_attr);
     CHECK_MSG_RET(ctx->send_cq != 0, "Error creating CQ", 0);
     CHECK_MSG_RET(ctx->recv_cq != 0, "Error creating CQ", 0);
     
@@ -799,13 +810,13 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port, int mem_pool_size)
     atomic_set(&ctx->comp_handler_count, 0);
 
 
-    ctx->pool = get_batch_request_pool(mem_pool_size);
+    ctx->pool = get_batch_request_pool(1024);
     return ctx;
 }
 
-bool merge_wr(struct ib_send_wr* old_wr, struct ib_sge *old_sg, struct ib_send_wr* new_wr, struct ib_sge *new_sg) 
+bool merge_wr(struct ib_rdma_wr* old_rdma_wr, struct ib_sge *old_sg, struct ib_rdma_wr* new_rdma_wr, struct ib_sge *new_sg) 
 {
-    if(old_wr->opcode == new_wr->opcode && old_sg->addr + old_sg->length == new_sg->addr && old_wr->wr.rdma.remote_addr + old_sg->length == new_wr->wr.rdma.remote_addr)
+    if(old_rdma_wr->wr.opcode == new_rdma_wr->wr.opcode && old_sg->addr + old_sg->length == new_sg->addr && old_rdma_wr->remote_addr + old_sg->length == new_rdma_wr->remote_addr)
     {
         old_sg->length += new_sg->length;
         return true;
@@ -816,7 +827,7 @@ bool merge_wr(struct ib_send_wr* old_wr, struct ib_sge *old_sg, struct ib_send_w
     }
 }
 
-void make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op,
+void make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* rdma_wr, struct ib_sge *sg, RDMA_OP op,
         u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
 {
     memset(sg, 0, sizeof(struct ib_sge));
@@ -824,37 +835,37 @@ void make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP o
     sg->length   = length;
     sg->lkey     = ctx->mr->lkey;
 
-    memset(wr, 0, sizeof(*wr));
+    memset(rdma_wr, 0, sizeof(*rdma_wr));
 #if MODE == MODE_ASYNC || MODE == MODE_ONE
-    wr->wr_id      = (u64)batch_req;
+    rdma_wr->wr.wr_id      = (u64)batch_req;
 #elif MODE == MODE_SYNC
-    wr->wr_id      = 0;
+    rdma_wr->wr.wr_id      = 0;
 #else
     #error "Wrong Mode"
 #endif
-    wr->sg_list    = sg;
-    wr->num_sge    = 1;
-    wr->opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
-    wr->send_flags = IB_SEND_SIGNALED;
-    wr->wr.rdma.remote_addr = ctx->rem_vaddr + remote_offset;
-    wr->wr.rdma.rkey        = ctx->rem_rkey;
+    rdma_wr->wr.sg_list    = sg;
+    rdma_wr->wr.num_sge    = 1;
+    rdma_wr->wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
+    rdma_wr->wr.send_flags = IB_SEND_SIGNALED;
+    rdma_wr->remote_addr = ctx->rem_vaddr + remote_offset;
+    rdma_wr->rkey        = ctx->rem_rkey;
 }
 
-void simple_make_wr(rdma_ctx_t ctx, struct ib_send_wr* wr, struct ib_sge *sg, RDMA_OP op,
+void simple_make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* rdma_wr, struct ib_sge *sg, RDMA_OP op,
         u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
 {
     sg->addr     = (uintptr_t)dma_addr;
     sg->length   = length;
 
 #if MODE == MODE_ASYNC || MODE == MODE_ONE
-    wr->wr_id      = (u64)batch_req;
+    rdma_wr->wr.wr_id      = (u64)batch_req;
 #elif MODE == MODE_SYNC
-    wr->wr_id      = 0;
+    rdma_wr->wr.wr_id      = 0;
 #else
     #error "Wrong Mode"
 #endif
-    wr->opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
-    wr->wr.rdma.remote_addr = ctx->rem_vaddr + remote_offset;
+    rdma_wr->wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
+    rdma_wr->remote_addr = ctx->rem_vaddr + remote_offset;
 }
 
 
@@ -863,12 +874,12 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
 {
     struct ib_send_wr* bad_wr;
     struct ib_sge sg;
-    struct ib_send_wr wr;
+    struct ib_rdma_wr wr;
     int retval;
 
     make_wr(ctx, &wr, &sg, op, dma_addr, remote_offset, length, batch_req);
 
-    retval = ib_post_send(ctx->qp, &wr, &bad_wr);
+    retval = ib_post_send(ctx->qp, &wr.wr, &bad_wr);
     if (retval)
     {
         pr_err("Error posting write request, msg %d", retval);
