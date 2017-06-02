@@ -28,22 +28,10 @@ typedef struct rdma_request
 typedef struct batch_request
 {
     int id;
-#if CUSTOM_MAKE_REQ_FN
-    struct bio *bio;
-#else
     volatile struct request * req;
-#endif
     int nsec;
     volatile int outstanding_reqs;
     volatile struct batch_request* next;
-#if MODE == MODE_ONE
-    volatile bool all_request_sent;
-    volatile int comp_reqs;
-#endif
-#if MEASURE_LATENCY
-    unsigned long long start_time;
-    bool first;
-#endif
 } batch_request;
 
 static inline uint64_t get_cycle(void){
@@ -62,9 +50,6 @@ typedef struct batch_request_pool
     int head;
     int tail;
     spinlock_t lock;
-#if MEASURE_LATENCY
-    int latency_dist[LATENCY_BUCKET];
-#endif
 } batch_request_pool;
 
 struct rdma_ctx {
