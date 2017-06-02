@@ -46,6 +46,7 @@ static int __init rmem_init(void) {
   char input[128];
   rdma_request req;
 
+
   LOG_KERN(LOG_INFO, "Start rmem_rdma. rdma_library_init() CPU freq %d kHz\n", cpu_khz);
   ret = rdma_library_init();
   pr_err("init success? %d\n", ret);

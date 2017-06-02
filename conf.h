@@ -4,10 +4,10 @@
 #define MODE_SYNC 1
 #define MODE_ASYNC 2
 #define MODE_ONE 3
-#define MODE MODE_ONE
+#define MODE MODE_SYNC
 
 #define COPY_LESS 0
-#define SIMPLE_POLL 1
+#define SIMPLE_POLL 0
 #define SIMPLE_MAKE_WR 0
 
 #define CUSTOM_MAKE_REQ_FN 0

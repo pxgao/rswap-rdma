@@ -741,7 +741,7 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
     }
 
     //using 0 as flag, need to check if that is correct
-    ctx->pd = ib_alloc_pd(rdma_ib_device.dev, 0);
+    ctx->pd = ib_alloc_pd(rdma_ib_device.dev, IB_PD_UNSAFE_GLOBAL_RKEY);
     CHECK_MSG_RET(ctx->pd != 0, "Error creating pd", 0);
 
     memset(&cq_attr, 0, sizeof(cq_attr));
@@ -833,7 +833,9 @@ void make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* rdma_wr, struct ib_sge *sg, RDMA
     memset(sg, 0, sizeof(struct ib_sge));
     sg->addr     = (uintptr_t)dma_addr;
     sg->length   = length;
-    sg->lkey     = ctx->mr->lkey;
+    //sg->lkey     = ctx->mr->lkey;
+    sg->lkey     = ctx->pd->local_dma_lkey;
+    //sg->lkey     = ctx->pd->unsafe_global_rkey;
 
     memset(rdma_wr, 0, sizeof(*rdma_wr));
 #if MODE == MODE_ASYNC || MODE == MODE_ONE
