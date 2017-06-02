@@ -61,9 +61,6 @@ batch_request_pool* get_batch_request_pool(int size)
         pool->all[i] = pool->data[i];
     }
 
-#if MEASURE_LATENCY
-    memset(pool->latency_dist, 0, sizeof(pool->latency_dist));
-#endif
     return pool;
 }
 
@@ -92,9 +89,6 @@ batch_request* get_batch_request(batch_request_pool* pool)
         BUG_ON(ret == NULL);
         pool->data[pool->head] = NULL;
         pool->head = (pool->head + 1) % pool->size;
-#if MEASURE_LATENCY
-        ret->start_time = get_cycle();
-#endif
     //    LOG_KERN(LOG_INFO, "head %d tail %d", pool->head, pool->tail);
     }
     spin_unlock_irq(&pool->lock);
@@ -106,14 +100,6 @@ void return_batch_request(batch_request_pool* pool, batch_request* req)
     int new_tail,bucket;
     BUG_ON(req == NULL);
     spin_lock_irq(&pool->lock);
-#if MEASURE_LATENCY
-    if(req->first)
-    {
-      bucket = (get_cycle() - req->start_time)*1000/cpu_khz;
-      LOG_KERN(LOG_INFO, "cycle %d, bucket %d", get_cycle() - req->start_time, bucket);
-      pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;
-    }
-#endif
     new_tail = (pool->tail + 1) % pool->size;
     if(new_tail == pool->head)
     {
@@ -358,7 +344,7 @@ static int receive_data(rdma_ctx_t ctx, char* data, int size) {
     set_fs(KERNEL_DS);
 
     //retval = sock_recvmsg(ctx->sock, &msg, size, 0);
-    retval = sock_recvmsg(ctx->sock, &msg, size);
+    retval = sock_recvmsg(ctx->sock, &msg, 0);
 
     set_fs(oldfs);
 
@@ -413,12 +399,12 @@ static int handshake(rdma_ctx_t ctx)
 
     // first send mem size
     snprintf(data, 500, "%llu", ctx->rem_mem_size);
-    printk(KERN_WARNING "Sending: %s", data);
+    LOG_KERN(LOG_INFO, "Sending: %s", data);
     send_data(ctx, data, strlen(data));
 
     // receive handshake data from server
     retval = receive_data(ctx, data, 500);
-    printk(KERN_WARNING "data received: %s", data);
+    LOG_KERN(LOG_INFO, "data received: %s", data);
     
     sscanf(data, "%016Lx:%u:%x:%x:%x", &ctx->rem_vaddr, &ctx->rem_rkey, 
            &ctx->rem_qpn, &ctx->rem_psn, &ctx->rem_lid);
@@ -561,73 +547,6 @@ static int rdma_setup(rdma_ctx_t ctx)
     return 0;
 }
 
-
-#if MODE == MODE_ASYNC || MODE == MODE_ONE
-static void comp_handler_send(struct ib_cq* cq, void* cq_context)
-{
-    struct ib_wc wc;
-    int ret;
-    struct batch_request* batch_req, *curr;
-    struct request* req;
-    spinlock_t* queue_lock;
-    rdma_ctx_t ctx = (rdma_ctx_t)cq_context;
- 
-    LOG_KERN(LOG_INFO, "COMP HANDLER pid %d, cpu %d", current->pid, smp_processor_id());
-
-    do {
-        while (ib_poll_cq(cq, 1, &wc)> 0) {
-            if (wc.status == IB_WC_SUCCESS) {
-                //LOG_KERN(LOG_INFO, "IB_WC_SUCCESS %p op: %s byte_len: %u",
-                //            (struct batch_request*)wc.wr_id,
-                //            wc.opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
-                //            wc.opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" :
-                //            "other", (unsigned) wc.byte_len);
-                batch_req = (struct batch_request*)wc.wr_id;
-                //LOG_KERN(LOG_INFO, "id = %d outstanding_reqs = %d", batch_req->id, batch_req->outstanding_reqs);
-#if MODE == MODE_ONE
-                batch_req->comp_reqs++;
-                if(batch_req->outstanding_reqs == batch_req->comp_reqs && batch_req->all_request_sent)
-#else
-                batch_req->outstanding_reqs--;
-                if(batch_req->outstanding_reqs == 0)
-#endif
-                {
-                    #if CUSTOM_MAKE_REQ_FN
-                        LOG_KERN(LOG_INFO, "returning batch request %d", batch_req->id);
-                        bio_endio(batch_req->bio, 0);
-                        return_batch_request(ctx->pool, batch_req);
-                    #else
-                        for(curr = batch_req; curr != NULL; curr = (struct batch_request*)curr->next)
-                        {
-                            req = (struct request*)curr->req;
-                            queue_lock = req->q->queue_lock;
-                            LOG_KERN(LOG_INFO, "returning batch request %d", curr->id);
-                            #if DEBUG_OUT_REQ
-                            debug_pool_remove(ctx->pool, req);
-                            #endif
-                            spin_lock_irq(queue_lock);
-                            __blk_end_request_all(req, 0);
-                            spin_unlock_irq(queue_lock);
-                            //__blk_end_request(curr->req, 0, curr->nsec);
-                            return_batch_request(ctx->pool, curr);
-                        }
-                    #endif
-                }
-            } else {
-                pr_err("FAILURE %d", wc.status);
-                BUG();
-            }
-        }
-        ret = ib_req_notify_cq(cq, IB_CQ_NEXT_COMP | IB_CQ_REPORT_MISSED_EVENTS);
-        if (ret < 0) {
-            pr_err("ib_req_notify_cq < 0, ret = %d", ret);
-        }
-    } while (ret > 0);
-
-}
-
-
-#elif (MODE == MODE_SYNC)
 static void comp_handler_send(struct ib_cq* cq, void* cq_context)
 {
     LOG_KERN(LOG_INFO, "OMG. This function is called........\n");
@@ -645,13 +564,6 @@ void poll_cq(rdma_ctx_t ctx)
     do {
         while ((count = ib_poll_cq(cq, 10, wc)) > 0) {
             #if SIMPLE_POLL
-            # if MEASURE_LATENCY
-            if(wc[0].wr_id)
-            {
-                bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)/3000;
-                ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
-            }                        
-            # endif
             LOG_KERN(LOG_INFO, "poll %d reqs, out req %d", count, ctx->outstanding_requests);
             ctx->outstanding_requests-=count;
             #else
@@ -662,13 +574,6 @@ void poll_cq(rdma_ctx_t ctx)
                             wc[i].opcode == IB_WC_RDMA_READ ? "IB_WC_RDMA_READ" : 
                             wc[i].opcode == IB_WC_RDMA_WRITE ? "IB_WC_RDMA_WRITE" 
                                :"other", (unsigned) wc[i].byte_len);
-                    #if MEASURE_LATENCY
-                    if(wc[i].wr_id)
-                    {
-                        bucket = (get_cycle() - (unsigned long long)wc[i].wr_id)/3000;
-                        ctx->pool->latency_dist[bucket>=LATENCY_BUCKET?LATENCY_BUCKET-1:bucket]++;  
-                    }                        
-                    #endif
                 } else {
                     LOG_KERN(LOG_INFO, "FAILURE %d", wc[i].status);
                 }
@@ -686,7 +591,6 @@ void poll_cq(rdma_ctx_t ctx)
     LOG_KERN(LOG_INFO, "COMP HANDLER done");
 }
 
-#endif
 
 
 void comp_handler_recv(struct ib_cq* cq, void* cq_context)
@@ -838,36 +742,13 @@ void make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* rdma_wr, struct ib_sge *sg, RDMA
     //sg->lkey     = ctx->pd->unsafe_global_rkey;
 
     memset(rdma_wr, 0, sizeof(*rdma_wr));
-#if MODE == MODE_ASYNC || MODE == MODE_ONE
-    rdma_wr->wr.wr_id      = (u64)batch_req;
-#elif MODE == MODE_SYNC
     rdma_wr->wr.wr_id      = 0;
-#else
-    #error "Wrong Mode"
-#endif
     rdma_wr->wr.sg_list    = sg;
     rdma_wr->wr.num_sge    = 1;
     rdma_wr->wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
     rdma_wr->wr.send_flags = IB_SEND_SIGNALED;
     rdma_wr->remote_addr = ctx->rem_vaddr + remote_offset;
     rdma_wr->rkey        = ctx->rem_rkey;
-}
-
-void simple_make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* rdma_wr, struct ib_sge *sg, RDMA_OP op,
-        u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
-{
-    sg->addr     = (uintptr_t)dma_addr;
-    sg->length   = length;
-
-#if MODE == MODE_ASYNC || MODE == MODE_ONE
-    rdma_wr->wr.wr_id      = (u64)batch_req;
-#elif MODE == MODE_SYNC
-    rdma_wr->wr.wr_id      = 0;
-#else
-    #error "Wrong Mode"
-#endif
-    rdma_wr->wr.opcode     = (op==RDMA_READ?IB_WR_RDMA_READ : IB_WR_RDMA_WRITE);
-    rdma_wr->remote_addr = ctx->rem_vaddr + remote_offset;
 }
 
 
@@ -878,7 +759,7 @@ int send_wr(rdma_ctx_t ctx, RDMA_OP op, u64 dma_addr, uint64_t remote_offset,
     struct ib_sge sg;
     struct ib_rdma_wr wr;
     int retval;
-
+    LOG_KERN(LOG_INFO, "op %d local_addr %llu remote_offset %llu len %u", op, dma_addr, remote_offset, length);
     make_wr(ctx, &wr, &sg, op, dma_addr, remote_offset, length, batch_req);
 
     retval = ib_post_send(ctx->qp, &wr.wr, &bad_wr);
@@ -914,9 +795,7 @@ int rdma_op(rdma_ctx_t ct, rdma_req_t req, int n_requests)
     //LOG_KERN(LOG_INFO, "Waiting for requests completion n_req = %lu", ctx->outstanding_requests);
     // wait until all requests are done
 
-#if MODE == MODE_SYNC
     poll_cq(ctx);
-#endif
     return 0;
 }
 

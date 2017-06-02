@@ -56,24 +56,24 @@ static int __init rmem_init(void) {
 
   rdma_ctx = rdma_init(100, "10.10.49.89", 19888);
   if(rdma_ctx == NULL){
-    pr_info("rdma_init() failed\n");
+    pr_err("rdma_init() failed\n");
     goto out;
   }
 
-  pr_info("rmem_rdma successfully loaded!\n");
+  pr_err("rmem_rdma successfully loaded!\n");
 
   req.rw = RDMA_WRITE;
   req.length = 10;
   req.dma_addr = rdma_map_address(output, 10);
   req.remote_offset = 0;
 
-  rdma_op(rdma_ctx, &req, 1);
+  //rdma_op(rdma_ctx, &req, 1);
 
   req.rw = RDMA_READ;
   req.dma_addr = rdma_map_address(input, 10);
   rdma_op(rdma_ctx, &req, 1);
   
-  pr_info("result %s", input);
+  LOG_KERN(LOG_INFO, "result %s", input);
 
   return 0;
 

@@ -1,3 +1,4 @@
+Module.symvers
 .log.o.cmd
 .rdma_library.o.cmd
 .rmem.o.cmd
