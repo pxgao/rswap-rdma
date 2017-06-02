@@ -43,7 +43,7 @@ rdma_ctx_t rdma_ctx;
 static int __init rmem_init(void) {
   int ret;
   char output[128] = "hellordma";
-  char input[128];
+  char input[128] = "01234567890123456789";
   rdma_request req;
 
 

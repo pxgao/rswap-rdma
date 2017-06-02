@@ -413,12 +413,12 @@ static int rdma_setup(rdma_ctx_t ctx)
     //ctx->mr = ib_get_dma_mr(ctx->pd, IB_ACCESS_REMOTE_READ | 
     //                                 IB_ACCESS_REMOTE_WRITE | 
     //                                 IB_ACCESS_LOCAL_WRITE);
-    ctx->mr = ctx->pd->device->get_dma_mr(ctx->pd, IB_ACCESS_REMOTE_READ |
-                                                   IB_ACCESS_REMOTE_WRITE |
-                                                   IB_ACCESS_LOCAL_WRITE); 
-    CHECK_MSG_RET(ctx->mr != 0, "Error creating MR", -1);
+    //ctx->mr = ctx->pd->device->get_dma_mr(ctx->pd, IB_ACCESS_REMOTE_READ |
+    //                                               IB_ACCESS_REMOTE_WRITE |
+    //                                               IB_ACCESS_LOCAL_WRITE); 
+    //CHECK_MSG_RET(ctx->mr != 0, "Error creating MR", -1);
 
-    ctx->rkey = ctx->mr->rkey;
+    //ctx->rkey = ctx->mr->rkey;
 
     // get dma_addr
     ctx->dma_addr = ib_dma_map_single(rdma_ib_device.dev, ctx->rdma_recv_buffer, 
@@ -527,8 +527,10 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
     }
 
     //using 0 as flag, need to check if that is correct
-    ctx->pd = ib_alloc_pd(rdma_ib_device.dev, IB_PD_UNSAFE_GLOBAL_RKEY);
+    //ctx->pd = ib_alloc_pd(rdma_ib_device.dev, IB_PD_UNSAFE_GLOBAL_RKEY);
+    ctx->pd = ib_alloc_pd(rdma_ib_device.dev, 0);
     CHECK_MSG_RET(ctx->pd != 0, "Error creating pd", 0);
+    LOG_KERN(LOG_INFO, "dev local_dma_lkey: %lu, pd local_dma_lkey:%lu", (unsigned long)rdma_ib_device.dev->local_dma_lkey, (unsigned long)ctx->pd->local_dma_lkey);
 
     memset(&cq_attr, 0, sizeof(cq_attr));
     cq_attr.cqe = CQE_SIZE;   
@@ -598,18 +600,6 @@ rdma_ctx_t rdma_init(int npages, char* ip_addr, int port)
     return ctx;
 }
 
-bool merge_wr(struct ib_rdma_wr* old_rdma_wr, struct ib_sge *old_sg, struct ib_rdma_wr* new_rdma_wr, struct ib_sge *new_sg) 
-{
-    if(old_rdma_wr->wr.opcode == new_rdma_wr->wr.opcode && old_sg->addr + old_sg->length == new_sg->addr && old_rdma_wr->remote_addr + old_sg->length == new_rdma_wr->remote_addr)
-    {
-        old_sg->length += new_sg->length;
-        return true;
-    }
-    else
-    {
-        return false;
-    }
-}
 
 void make_wr(rdma_ctx_t ctx, struct ib_rdma_wr* rdma_wr, struct ib_sge *sg, RDMA_OP op,
         u64 dma_addr, uint64_t remote_offset, uint length, struct batch_request* batch_req)
